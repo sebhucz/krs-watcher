@@ -1,72 +1,50 @@
-// krsWatcher.mjs
-import fs from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
-import nodemailer from 'nodemailer';
-import { analyzeOdpis, formatPLN } from './analyzer.mjs';
+// src/krsWatcher.mjs
 
-dotenv.config();
+import fs from "fs";
+import path from "path";
+import fetch from "node-fetch";
+import nodemailer from "nodemailer";
+import { fileURLToPath } from "url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CFG_PATH = path.join(__dirname, 'config.json');
-const STATE_PATH = path.join(__dirname, 'state.json');
-const CSV_PATH_DEFAULT = path.join(__dirname, 'companies.csv');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const REGISTRY_URL = (k) =>
-  `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${k}?rejestr=P&format=json`;
+const CONFIG_PATH = path.join(__dirname, "config.json");
+const STATE_PATH = path.join(__dirname, "state.json");
 
-async function loadJsonSafe(p, fallback) {
-  try {
-    return JSON.parse(await fs.readFile(p, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-async function saveJsonSafe(p, data) {
-  await fs.writeFile(p, JSON.stringify(data, null, 2), 'utf8');
+// ---- funkcja: wczytaj konfigurację ----
+function loadConfig() {
+  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
 }
 
+// ---- funkcja: wczytaj/utwórz state ----
+function loadState() {
+  if (!fs.existsSync(STATE_PATH)) return {};
+  return JSON.parse(fs.readFileSync(STATE_PATH, "utf8"));
+}
+function saveState(state) {
+  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+}
+
+// ---- funkcja: pobierz odpis z API ----
 async function fetchOdpis(krs) {
-  const url = REGISTRY_URL(krs);
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch (e) {
-    throw new Error(`Nieprawidłowy JSON: ${e.message}`);
-  }
+  const url = `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${krs}?rejestr=P&format=json`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`Błąd pobierania KRS ${krs}: ${res.status}`);
+  return res.json();
 }
 
-function must(val, name) {
-  if (!val) throw new Error(`Missing required env/config: ${name}`);
-  return val;
+// ---- funkcja: ostatni numer wpisu ----
+function getLastNumerWpisu(payload) {
+  const wpisy = payload?.odpis?.naglowekP?.wpis || [];
+  if (!Array.isArray(wpisy) || !wpisy.length) return null;
+  return Math.max(...wpisy.map((w) => Number(w?.numerWpisu) || 0));
 }
 
-function buildTransport() {
-  const host = must(process.env.SMTP_HOST, 'SMTP_HOST');
-  const port = Number(must(process.env.SMTP_PORT, 'SMTP_PORT'));
-  const secure = String(process.env.SMTP_SECURE || 'true').toLowerCase() === 'true';
-  const user = must(process.env.SMTP_USER, 'SMTP_USER');
-  const pass = must(process.env.SMTP_PASS, 'SMTP_PASS');
-  return nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
-}
-
-// ---------- utils: HTML escape + nazwa spółki ----------
-function esc(s) {
-  return String(s ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
-
-// Pobiera aktualną (ostatnią) nazwę spółki z payloadu Odpisu
-function getCompanyName(payload, lastNumerWpisu) {
-  // 1) najczęściej spotykane ścieżki
-  const candidatesPaths = [
+// ---- funkcja: NAZWA SPÓŁKI – tylko Dział I ----
+function getCompanyName(payload) {
+  // Spróbuj bezpośrednich pól
+  const directPaths = [
     (d) => d?.odpis?.dane?.dzial1?.danePodmiotu?.nazwa,
     (d) => d?.odpis?.dane?.dzial1?.danePodmiotu?.firma,
     (d) => d?.odpis?.dane?.dzial1?.podstawoweDane?.nazwa,
@@ -74,29 +52,34 @@ function getCompanyName(payload, lastNumerWpisu) {
     (d) => d?.odpis?.dane?.dzialI?.danePodmiotu?.nazwa,
     (d) => d?.odpis?.dane?.dzialI?.danePodmiotu?.firma,
   ];
-  for (const g of candidatesPaths) {
+  for (const g of directPaths) {
     const v = g(payload);
-    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === "string" && v.trim()) return v.trim();
   }
 
-  // 2) fallback: skan całego obiektu, preferuj rekordy z nrWpisu(Wprow)
+  // Jeśli brak – przeszukaj tylko Dział I
+  const dz1 = payload?.odpis?.dane?.dzial1 ?? payload?.odpis?.dane?.dzialI;
+  if (!dz1 || typeof dz1 !== "object") return "";
+
   let bestWithNr = { nr: -Infinity, name: null };
-  let bestFallback = '';
-  const stack = [payload];
+  let bestFallback = "";
+  const stack = [dz1];
   while (stack.length) {
     const cur = stack.pop();
     if (Array.isArray(cur)) {
       for (const it of cur) stack.push(it);
       continue;
     }
-    if (cur && typeof cur === 'object') {
+    if (cur && typeof cur === "object") {
       const possible = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
-      if (typeof possible === 'string' && possible.trim()) {
+      if (typeof possible === "string" && possible.trim()) {
         const nr = Number(cur.nrWpisuWprow ?? cur.nrWpisuaWprow);
         if (Number.isFinite(nr)) {
-          if (nr >= bestWithNr.nr) bestWithNr = { nr, name: possible.trim() };
-        } else if (possible.trim().length > bestFallback.length) {
-          bestFallback = possible.trim();
+          if (nr >= bestWithNr.nr)
+            bestWithNr = { nr, name: possible.trim() };
+        } else {
+          if (possible.trim().length > bestFallback.length)
+            bestFallback = possible.trim();
         }
       }
       for (const k in cur) stack.push(cur[k]);
@@ -104,269 +87,174 @@ function getCompanyName(payload, lastNumerWpisu) {
   }
   if (bestWithNr.name) return bestWithNr.name;
   if (bestFallback) return bestFallback;
-  return '';
+  return "";
 }
 
-// ---------- Ładowanie listy KRS ----------
-function uniq(arr) {
-  return Array.from(new Set(arr));
-}
-function normKrs(s) {
-  return String(s || '').replace(/\D/g, '').padStart(10, '0').slice(-10);
-}
+// ---- funkcja: zbieranie działów zmian ----
+function collectChangedByDzial(payload, last) {
+  const dane = payload?.odpis?.dane;
+  if (!dane || typeof dane !== "object") return [];
 
-async function loadKrsFromCsv(csvPath) {
-  try {
-    const raw = await fs.readFile(csvPath, 'utf8');
-    const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (!lines.length) return [];
-    const sep = lines[0].includes(';') && !lines[0].includes(',') ? ';' : ',';
-    const header = lines[0].toUpperCase();
-    const hasHeader = /KRS/.test(header);
-    const dataLines = hasHeader ? lines.slice(1) : lines;
-    const idx = hasHeader ? header.split(sep).findIndex((h) => /KRS/.test(h)) : 0;
-    const vals = dataLines.map((ln) => {
-      const cols = ln.split(sep).map((c) => c.trim());
-      return normKrs(cols[idx >= 0 ? idx : 0]);
-    });
-    return vals.filter((v) => /^\d{10}$/.test(v));
-  } catch {
-    return [];
-  }
-}
+  const DZIAL_DESC = {
+    dzial1: "Dział I – Dane podmiotu i kapitał",
+    dzial2: "Dział II – Organy i reprezentacja",
+    dzial3: "Dział III – PKD, sprawozdania, wzmianki",
+    dzial4: "Dział IV – Postępowania, upadłości",
+    dzial5: "Dział V – Połączenia, podziały, przekształcenia",
+    dzial6: "Dział VI – Wzmianki różne",
+    dzialI: "Dział I – Dane podmiotu i kapitał",
+    dzialII: "Dział II – Organy i reprezentacja",
+    dzialIII: "Dział III – PKD, sprawozdania, wzmianki",
+    dzialIV: "Dział IV – Postępowania, upadłości",
+    dzialV: "Dział V – Połączenia, podziały, przekształcenia",
+    dzialVI: "Dział VI – Wzmianki różne",
+  };
 
-async function loadKrsFromSheetsCsv(url) {
-  if (!url) return [];
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const text = await res.text();
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (!lines.length) return [];
-    const header = lines[0].toUpperCase();
-    const sep = ',';
-    const hasHeader = /KRS/.test(header);
-    const idx = hasHeader ? header.split(sep).findIndex((h) => /KRS/.test(h)) : 0;
-    const dataLines = hasHeader ? lines.slice(1) : lines;
-    const vals = dataLines.map((ln) => {
-      const cols = ln.split(sep).map((c) => c.replace(/^"|"$/g, '').trim());
-      return normKrs(cols[idx >= 0 ? idx : 0]);
-    });
-    return vals.filter((v) => /^\d{10}$/.test(v));
-  } catch {
-    return [];
-  }
-}
-
-async function loadKrsList(cfg) {
-  const listFromCfg = (cfg.krs || []).map(normKrs).filter((v) => /^\d{10}$/.test(v));
-  const csvPath = cfg.csvPath
-    ? path.isAbsolute(cfg.csvPath)
-      ? cfg.csvPath
-      : path.join(__dirname, '..', cfg.csvPath)
-    : CSV_PATH_DEFAULT;
-  const listFromCsv = await loadKrsFromCsv(csvPath);
-  const listFromSheets = await loadKrsFromSheetsCsv(cfg.sheetsCsvUrl || '');
-  return uniq([...listFromCfg, ...listFromCsv, ...listFromSheets]);
-}
-
-// ---------- E-mail: dzienny raport z nazwami ----------
-function htmlReport({ dateStr, results }) {
-  const changed = results.filter((r) => r.ok && r.changed);
-  const changedCap = changed.filter((r) => r.kapitalChanged);
-  const subjPrefix = changedCap.length ? 'ALERT ' : '';
-  const subject = `${subjPrefix}KRS: dzienny raport (${changed.length} spółek ze zmianą)`;
-
-  // mini-tabela zmian kapitału
-  const capRows = changedCap
-    .map((r) => {
-      const prev = r.kapital?.poprzednia ? formatPLN(r.kapital.poprzednia) : '—';
-      const now = r.kapital?.nowa ? formatPLN(r.kapital.nowa) : '—';
-      const diff = Number.isFinite(r.kapital?.roznica) ? formatPLN(r.kapital.roznica) : '—';
-      const name = r.name ? esc(r.name) : '—';
-      return `<tr>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb">
-          <div style="font-weight:600">${r.krs}</div>
-          <div style="font-size:12px;color:#6b7280">${name}</div>
-        </td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb">${prev}</td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb">${now}</td>
-        <td style="padding:8px;border-bottom:1px solid #e5e7eb;font-weight:600">${diff}</td>
-      </tr>`;
-    })
-    .join('');
-
-  // sekcje spółek (tylko te ze zmianą)
-  const sections =
-    changed
-      .map((r) => {
-        const dz = (r.dzialy || [])
-          .map(
-            (d) =>
-              `<span style="display:inline-block;margin:2px 6px 0 0;padding:4px 8px;border:1px solid #e5e7eb;border-radius:999px;background:#f8fafc;color:#111827;font-size:12px;">${esc(
-                d
-              )}</span>`
-          )
-          .join('');
-        const name = r.name ? esc(r.name) : '';
-        let kapHtml =
-          '<p style="margin:8px 0 0;color:#6b7280;font-size:14px">Kapitał: brak zmian lub sekcja niedostępna.</p>';
-        if (r.kapital) {
-          const prev = r.kapital.poprzednia ? formatPLN(r.kapital.poprzednia) : '—';
-          const now = r.kapital.nowa ? formatPLN(r.kapital.nowa) : '—';
-          const diff = Number.isFinite(r.kapital.roznica) ? formatPLN(r.kapital.roznica) : '—';
-          kapHtml = `<div style="margin-top:6px;padding:10px;border:1px solid #fde68a;background:#fffbeb;border-radius:12px">
-            <div style="font-weight:700;color:#92400e">Zmieniono kapitał zakładowy</div>
-            <div style="margin-top:6px;color:#111827">Poprzednia: <strong>${prev}</strong></div>
-            <div>Nowa: <strong>${now}</strong></div>
-            <div style="margin-top:4px;color:#374151">Zmiana: <strong>${diff}</strong></div>
-          </div>`;
+  const out = [];
+  for (const key of Object.keys(dane)) {
+    if (!/^dzial/i.test(key)) continue;
+    const section = dane[key];
+    const bucket = [];
+    const stack = [{ node: section, path: key }];
+    while (stack.length) {
+      const { node, path } = stack.pop();
+      if (Array.isArray(node)) {
+        node.forEach((it, idx) =>
+          stack.push({ node: it, path: `${path}[${idx}]` })
+        );
+        continue;
+      }
+      if (node && typeof node === "object") {
+        const nr = node.nrWpisuWprow ?? node.nrWpisuaWprow;
+        if (nr != null && String(nr) === String(last)) {
+          bucket.push({ path, data: node });
         }
-        return `<div style="padding:14px 0;border-top:1px solid #e5e7eb">
-          <h3 style="margin:0 0 6px;font-size:16px">
-            ${r.krs}${name ? ` — ${name}` : ''} – wpis <span style="font-family:ui-monospace,monospace">${r.last}</span>
-          </h3>
-          <div style="margin:6px 0 0;color:#374151">Działy:</div>
-          <div style="margin-top:4px">${dz || '<span style="color:#6b7280">—</span>'}</div>
-          ${kapHtml}
-          <p style="margin-top:8px;font-size:12px;color:#6b7280">Źródło: <a href="${REGISTRY_URL(
-            r.krs
-          )}" style="color:#2563eb;text-decoration:none">${REGISTRY_URL(r.krs)}</a></p>
-        </div>`;
-      })
-      .join('') || `<p style="color:#6b7280">Brak nowych wpisów dzisiaj.</p>`;
-
-  const html = `
-  <div style="font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#111827">
-    <h2 style="margin:0 0 4px">KRS – dzienny raport (${esc(dateStr)})</h2>
-    <p style="margin:0;color:#374151">Spółek ze zmianą: <strong>${changed.length}</strong> • ze zmianą kapitału: <strong>${changedCap.length}</strong></p>
-    ${
-      capRows
-        ? `
-    <div style="margin-top:10px">
-      <div style="font-weight:600;margin-bottom:6px">Zmiany kapitału (mini-tabela):</div>
-      <table style="width:100%;border-collapse:collapse;font-size:14px">
-        <thead>
-          <tr style="background:#f3f4f6">
-            <th style="text-align:left;padding:8px">KRS / Spółka</th>
-            <th style="text-align:left;padding:8px">Poprzednia</th>
-            <th style="text-align:left;padding:8px">Nowa</th>
-            <th style="text-align:left;padding:8px">Różnica</th>
-          </tr>
-        </thead>
-        <tbody>${capRows}</tbody>
-      </table>
-    </div>`
-        : ''
+        for (const k in node)
+          stack.push({ node: node[k], path: path + "." + k });
+      }
     }
-    <div style="margin-top:16px">${sections}</div>
-  </div>`;
-
-  const text = `KRS – dzienny raport (${dateStr})
-Zmian: ${changed.length}, kapitał: ${changedCap.length}`;
-  return { subject, html, text };
+    if (bucket.length)
+      out.push({ dzialKey: key, dzialName: DZIAL_DESC[key] || key, items: bucket });
+  }
+  return out;
 }
 
-// ---------- czas lokalny 14:00 Europe/Warsaw ----------
-function isNow14Warsaw() {
-  const fmt = new Intl.DateTimeFormat('pl-PL', {
-    timeZone: 'Europe/Warsaw',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
+// ---- funkcja: zmiana kapitału ----
+function getKapitalInfo(payload, last) {
+  const cands = [
+    (d) => d?.odpis?.dane?.dzial1?.kapital?.wysokoscKapitaluZakladowego,
+    (d) => d?.odpis?.dane?.kapital?.wysokoscKapitaluZakladowego,
+    (d) => d?.odpis?.dane?.dzialI?.kapital?.wysokoscKapitaluZakladowego,
+  ];
+  let arr = null;
+  for (const g of cands) {
+    const a = g(payload);
+    if (Array.isArray(a) && a.length) {
+      arr = a;
+      break;
+    }
+  }
+  if (!arr) return null;
+  const match = arr.find(
+    (it) =>
+      String(it?.nrWpisuWprow ?? it?.nrWpisuaWprow) === String(last)
+  );
+  if (!match) return null;
+  const prev =
+    arr
+      .map((it) => ({
+        nr: Number(it?.nrWpisuWprow ?? it?.nrWpisuaWprow),
+        val: it?.wartosc,
+      }))
+      .filter((x) => Number.isFinite(x.nr) && x.nr < last)
+      .sort((a, b) => b.nr - a.nr)[0] || null;
+  return { nowa: match?.wartosc ?? null, poprzednia: prev?.val ?? null };
+}
+
+// ---- wysyłka maila ----
+async function sendMail(config, subject, html) {
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: true,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
   });
-  const parts = fmt.formatToParts(new Date());
-  const hh = Number(parts.find((p) => p.type === 'hour')?.value || '0');
-  const mm = Number(parts.find((p) => p.type === 'minute')?.value || '0');
-  return hh === 14 && mm === 0;
-}
-
-// ---------- main ----------
-async function main() {
-  const cfg = await loadJsonSafe(CFG_PATH, null);
-  if (!cfg) throw new Error('Brak pliku config.json w katalogu src/');
-
-  // Bramka czasu – chyba że --force-send
-  if (!process.argv.includes('--force-send') && !isNow14Warsaw()) {
-    console.log('[info] Nie jest 14:00 Europe/Warsaw – pomijam wysyłkę (uruchomienie kontrolne).');
-    return;
-  }
-
-  const recipients = must((cfg.recipients || []).join(','), 'config.recipients');
-  const sendOnlyOnChange = cfg.sendOnlyOnChange !== false;
-  const state = await loadJsonSafe(STATE_PATH, {});
-  const transporter = buildTransport();
-
-  const krsList = await loadKrsList(cfg);
-  if (!krsList.length) throw new Error('Brak numerów KRS w config/csv/sheets');
-
-  const results = [];
-  for (const krs of krsList) {
-    try {
-      const payload = await fetchOdpis(krs);
-      const analysis = analyzeOdpis(payload);
-      if (!analysis.ok) throw new Error(analysis.error || 'Analiza nie powiodła się');
-
-      const companyName = getCompanyName(payload, analysis.last);
-
-      const prevLast = state[krs]?.lastNumerWpisu ?? null;
-      const changed = prevLast == null || Number(analysis.last) > Number(prevLast);
-
-      state[krs] = { lastNumerWpisu: analysis.last };
-      results.push({
-        krs,
-        name: companyName,
-        ok: true,
-        last: analysis.last,
-        changed,
-        dzialy: analysis.dzialy,
-        kapital: analysis.kapital,
-        kapitalChanged: !!analysis.kapital,
-      });
-    } catch (err) {
-      results.push({ krs, ok: false, error: String(err?.message || err) });
-    }
-  }
-
-  await saveJsonSafe(STATE_PATH, state);
-
-  const dateStr = new Intl.DateTimeFormat('pl-PL', {
-    timeZone: 'Europe/Warsaw',
-    dateStyle: 'long',
-  }).format(new Date());
-
-  const changed = results.filter((r) => r.ok && r.changed);
-  if (sendOnlyOnChange && changed.length === 0) {
-    console.log('[summary] Brak nowych wpisów – nie wysyłam e-maila.');
-    return;
-  }
-
-  const { subject, html, text } = htmlReport({ dateStr, results });
   await transporter.sendMail({
-    from: process.env.MAIL_FROM || 'KRS Watcher <noreply@example.com>',
-    to: recipients,
+    from: config.sender,
+    to: config.recipients.join(", "),
     subject,
-    text,
     html,
   });
-
-  console.log(
-    '[summary]',
-    JSON.stringify(
-      {
-        sent: true,
-        subject,
-        totals: { changed: changed.length, capital: changed.filter((r) => r.kapitalChanged).length },
-      },
-      null,
-      2
-    )
-  );
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+// ---- main ----
+async function main() {
+  const config = loadConfig();
+  const state = loadState();
+  const results = [];
+
+  for (const { krs } of config.krs) {
+    try {
+      const payload = await fetchOdpis(krs);
+      const last = getLastNumerWpisu(payload);
+      if (!last) continue;
+
+      const prevLast = state[krs] || null;
+      if (prevLast !== null && prevLast === last) {
+        continue; // brak nowych zmian
+      }
+
+      const name = getCompanyName(payload);
+      const kapital = getKapitalInfo(payload, last);
+      const dzialy = collectChangedByDzial(payload, last);
+
+      results.push({ krs, name, last, kapital, dzialy });
+
+      state[krs] = last;
+    } catch (e) {
+      console.error("Błąd przy KRS", krs, e.message);
+    }
+  }
+
+  if (!results.length) {
+    console.log("[summary] Brak nowych wpisów – nie wysyłam e-maila.");
+    return;
+  }
+
+  // Budowa maila
+  let alert = results.some((r) => r.kapital);
+  let subject = (alert ? "ALERT " : "") + "Zmiany w KRS – raport dzienny";
+  let html = `<h1>Raport zmian w KRS</h1>`;
+
+  for (const r of results) {
+    html += `<h2>${r.name} (KRS ${r.krs})</h2>`;
+    html += `<p>Ostatni wpis: ${r.last}</p>`;
+    if (r.kapital) {
+      html += `<p><strong>Kapitał zakładowy zmieniony:</strong> ${r.kapital.poprzednia} → ${r.kapital.nowa}</p>`;
+    }
+    html += `<ul>`;
+    for (const d of r.dzialy) {
+      html += `<li>${d.dzialName}</li>`;
+    }
+    html += `</ul>`;
+    html += `<p><a href="https://sebhucz.github.io/krs-watcher/?krs=${r.krs}" target="_blank">Podgląd w panelu</a></p>`;
+  }
+
+  await sendMail(config, subject, html);
+  saveState(state);
+}
+
+if (process.argv.includes("--force-send")) {
+  main();
+} else {
+  const now = new Date();
+  const hours = now.getUTCHours();
+  if (hours === 12) {
+    main();
+  } else {
+    console.log("[summary] Nie jest 14:00 Europe/Warsaw – pomijam wysyłkę.");
+  }
 }
