@@ -1,13 +1,15 @@
-name: KRS Watcher (test run)
+name: KRS Watcher (prod)
 
 on:
-  workflow_dispatch: {}     # uruchomienie ręczne z Actions (test teraz)
   schedule:
-    - cron: "0 * * * *"     # może zostać; nie przeszkadza
+    # codziennie o 14:00 czasu polskiego (Europe/Warsaw) → 12:00 UTC
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}
 
 jobs:
   run:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -25,8 +27,8 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # TEST: wyślij maila OD RAZU (pomija bramkę 14:00)
-      - run: npm run test:now -- --force-send
+      - name: Run watcher (production)
+        run: node src/krsWatcher.mjs
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
