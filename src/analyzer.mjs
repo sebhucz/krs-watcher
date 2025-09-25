@@ -1,79 +1,109 @@
 // analyzer.mjs
 export function formatPLN(txt){
-try{ let s=String(txt).replace(/ /g,'').replace(/\./g,'').replace(',', '.');
-const n=Number(s); if(Number.isFinite(n)) return n.toLocaleString('pl-PL',{style:'currency',currency:'PLN'});
-}catch{} return txt;
+  try{
+    let s=String(txt).replace(/ /g,'').replace(/\./g,'').replace(',', '.');
+    const n=Number(s);
+    if(Number.isFinite(n)) return n.toLocaleString('pl-PL',{style:'currency',currency:'PLN'});
+  }catch{}
+  return txt;
 }
-export function numify(txt){ if(txt==null) return NaN; let s=String(txt).replace(/ /g,'').replace(/\./g,'').replace(',', '.'); const n=Number(s); return Number.isFinite(n)?n:NaN; }
-
+export function numify(txt){
+  if(txt==null) return NaN;
+  let s=String(txt).replace(/ /g,'').replace(/\./g,'').replace(',', '.');
+  const n=Number(s);
+  return Number.isFinite(n)?n:NaN;
+}
 
 const DZIAL_DESC = {
-dzial1: 'Dział I – Dane podmiotu i kapitał',
-dzial2: 'Dział II – Organy i reprezentacja',
-dzial3: 'Dział III – PKD, sprawozdania, wzmianki',
-dzial4: 'Dział IV – Postępowania, upadłości',
-dzial5: 'Dział V – Połączenia, podziały, przekształcenia',
-dzial6: 'Dział VI – Wzmianki różne',
-dzialI: 'Dział I – Dane podmiotu i kapitał',
-dzialII: 'Dział II – Organy i reprezentacja',
-dzialIII: 'Dział III – PKD, sprawozdania, wzmianki',
-dzialIV: 'Dział IV – Postępowania, upadłości',
-dzialV: 'Dział V – Połączenia, podziały, przekształcenia',
-dzialVI: 'Dział VI – Wzmianki różne'
+  dzial1: 'Dział I – Dane podmiotu i kapitał',
+  dzial2: 'Dział II – Organy i reprezentacja',
+  dzial3: 'Dział III – PKD, sprawozdania, wzmianki',
+  dzial4: 'Dział IV – Postępowania, upadłości',
+  dzial5: 'Dział V – Połączenia, podziały, przekształcenia',
+  dzial6: 'Dział VI – Wzmianki różne',
+  dzialI: 'Dział I – Dane podmiotu i kapitał',
+  dzialII: 'Dział II – Organy i reprezentacja',
+  dzialIII: 'Dział III – PKD, sprawozdania, wzmianki',
+  dzialIV: 'Dział IV – Postępowania, upadłości',
+  dzialV: 'Dział V – Połączenia, podziały, przekształcenia',
+  dzialVI: 'Dział VI – Wzmianki różne'
 };
 const dzialDesc = (key) => DZIAL_DESC[key] || key;
 
-
 function entryTouchesPath(obj, last){
-const target = String(last);
-const stack = [obj];
-while(stack.length){
-const cur = stack.pop();
-if(Array.isArray(cur)) { for(const it of cur) stack.push(it); continue; }
-if(cur && typeof cur === 'object'){
-if(cur.nrWpisuWprow != null && String(cur.nrWpisuWprow) === target) return true;
-if(cur.nrWpisuaWprow != null && String(cur.nrWpisuaWprow) === target) return true;
-for(const k in cur){ stack.push(cur[k]); }
+  const target = String(last);
+  const stack = [obj];
+  while(stack.length){
+    const cur = stack.pop();
+    if(Array.isArray(cur)) { for(const it of cur) stack.push(it); continue; }
+    if(cur && typeof cur === 'object'){
+      if(cur.nrWpisuWprow != null && String(cur.nrWpisuWprow) === target) return true;
+      if(cur.nrWpisuaWprow != null && String(cur.nrWpisuaWprow) === target) return true;
+      for(const k in cur){ stack.push(cur[k]); }
+    }
+  }
+  return false;
 }
-}
-return false;
-}
-
 
 function dzialyDlaWpisu(data, last){
-const out = [];
-const dane = data?.odpis?.dane;
-if(!dane || typeof dane !== 'object') return out;
-for(const k of Object.keys(dane)){
-if(/^dzial/i.test(k)){
-const section = dane[k];
-try{ if(entryTouchesPath(section, last)) out.push(dzialDesc(k)); } catch{}
+  const out = [];
+  const dane = data?.odpis?.dane;
+  if(!dane || typeof dane !== 'object') return out;
+  for(const k of Object.keys(dane)){
+    if(/^dzial/i.test(k)){
+      const section = dane[k];
+      try{ if(entryTouchesPath(section, last)) out.push(dzialDesc(k)); } catch{}
+    }
+  }
+  return out;
 }
-}
-return out;
-}
-
 
 function getKapitalArray(data){
-const candidates = [
-d=>d?.odpis?.dane?.dzial1?.kapital?.wysokoscKapitaluZakladowego,
-d=>d?.odpis?.dane?.kapital?.wysokoscKapitaluZakladowego,
-d=>d?.odpis?.dane?.dzialI?.kapital?.wysokoscKapitaluZakladowego,
-];
-for(const g of candidates){ const arr=g(data); if(Array.isArray(arr)&&arr.length) return arr; }
-return null;
+  const candidates = [
+    d=>d?.odpis?.dane?.dzial1?.kapital?.wysokoscKapitaluZakladowego,
+    d=>d?.odpis?.dane?.kapital?.wysokoscKapitaluZakladowego,
+    d=>d?.odpis?.dane?.dzialI?.kapital?.wysokoscKapitaluZakladowego,
+  ];
+  for(const g of candidates){ const arr=g(data); if(Array.isArray(arr)&&arr.length) return arr; }
+  return null;
 }
 
-
 export function analyzeOdpis(payload){
-if(!payload || !payload.odpis)
-return { ok:false, error:'Brak pola odpis', last:null };
+  if(!payload || !payload.odpis)
+    return { ok:false, error:'Brak pola odpis', last:null };
 
+  const wpisy = payload?.odpis?.naglowekP?.wpis || [];
+  if(!Array.isArray(wpisy) || !wpisy.length)
+    return { ok:false, error:'Brak sekcji odpis.naglowekP.wpis', last:null };
 
-const wpisy = payload?.odpis?.naglowekP?.wpis || [];
-if(!Array.isArray(wpisy) || !wpisy.length)
-return { ok:false, error:'Brak sekcji odpis.naglowekP.wpis', last:null };
+  const last = wpisy.reduce((max, x) => {
+    const n = Number(x?.numerWpisu);
+    return (Number.isFinite(n) && n > max) ? n : max;
+  }, -Infinity);
+  if(!Number.isFinite(last))
+    return { ok:false, error:'Brak poprawnych numerWpisu', last:null };
 
+  const dzialy = dzialyDlaWpisu(payload, last);
 
-const last = wpisy.reduce((max, x) => {
+  const kap = getKapitalArray(payload);
+  let kapital = null;
+  if(kap){
+    const match = kap.find(it => String(it?.nrWpisuWprow ?? it?.nrWpisuaWprow) === String(last));
+    if(match){
+      const prev = kap
+        .map(it => ({ nr: Number(it?.nrWpisuWprow ?? it?.nrWpisuaWprow), val: it?.wartosc }))
+        .filter(x => Number.isFinite(x.nr) && x.nr < last)
+        .sort((a,b) => b.nr - a.nr)[0];
+      kapital = {
+        nowa: match?.wartosc ?? null,
+        poprzednia: prev?.val ?? null,
+        roznica: (()=>{
+          const nowN=numify(match?.wartosc), prevN=numify(prev?.val);
+          return Number.isFinite(nowN)&&Number.isFinite(prevN) ? nowN - prevN : null;
+        })()
+      };
+    }
+  }
+
+  return { ok:true, last, dzialy, kapital };
 }
