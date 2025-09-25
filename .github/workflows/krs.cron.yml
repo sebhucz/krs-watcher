@@ -1,9 +1,9 @@
-name: KRS Watcher (hourly gate at 14:00 Europe/Warsaw)
+name: KRS Watcher (test run)
 
 on:
+  workflow_dispatch: {}     # uruchomienie ręczne z Actions (test teraz)
   schedule:
-    - cron: "0 * * * *"
-  workflow_dispatch: {}
+    - cron: "0 * * * *"     # może zostać; nie przeszkadza
 
 jobs:
   run:
@@ -23,8 +23,9 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm ci
+      - run: npm install --no-audit --no-fund
 
+      # TEST: wyślij maila OD RAZU (pomija bramkę 14:00)
       - run: npm run test:now -- --force-send
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
