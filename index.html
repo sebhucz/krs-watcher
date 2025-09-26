@@ -15,26 +15,12 @@
   .wrap { max-width:1100px; margin:0 auto; padding:16px; }
   .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center }
   input[type="text"] { flex:1 1 420px; padding:12px 14px; border:1px solid var(--border); background:transparent; color:var(--fg); border-radius:12px; outline:none }
-  input[type="text"]::placeholder { color:var(--muted) }
   button { padding:12px 16px; border-radius:12px; border:1px solid var(--border); background:var(--card); color:var(--fg); cursor:pointer }
   button:hover { border-color:var(--accent) }
   small { color:var(--muted) }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; }
   .pill { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:#0b122010; margin-left:8px }
-  .warn { color:var(--warn) } .err { color:var(--err) } .ok { color:var(--ok) }
-  .kv { margin:6px 0 0; border-left:2px solid var(--border); padding-left:10px }
-  .kv div { margin:2px 0 }
-  code { background:#00000020; padding:1px 6px; border-radius:8px }
   .muted { color:var(--muted) }
-  details { border:1px solid var(--border); border-radius:12px; padding:10px 12px; background:var(--card); }
-  details + details { margin-top:10px; }
-  summary { cursor:pointer; list-style:none; font-weight:600 }
-  summary::-webkit-details-marker { display:none }
-  .caret::before { content:"▸"; display:inline-block; transform:rotate(0deg); margin-right:6px; color:var(--accent) }
-  details[open] > summary .caret::before { transform:rotate(90deg) }
-  textarea { width:100%; min-height:160px; padding:10px; border-radius:12px; border:1px solid var(--border); background:transparent; color:var(--fg); }
-  a { color:var(--accent); text-decoration: none }
-  a:hover { text-decoration: underline }
 </style>
 </head>
 <body>
@@ -46,256 +32,72 @@
 </header>
 
 <main class="wrap">
-
   <div class="card">
     <div class="row">
       <input id="krs" inputmode="numeric" pattern="[0-9]*" maxlength="10" placeholder="Wpisz numer KRS (10 cyfr)" />
       <button id="btn">Sprawdź teraz</button>
       <span id="meta" class="pill">—</span>
     </div>
-    <div id="note" class="muted" style="margin-top:8px"></div>
   </div>
 
   <div id="out" style="margin-top:12px"></div>
-
-  <div class="card" style="margin-top:12px">
-    <details id="pasteBox">
-      <summary><span class="caret"></span><strong>Wklej JSON ręcznie</strong> (na wypadek CORS)</summary>
-      <div style="margin-top:10px">
-        <textarea id="ta" placeholder='Tu wklej treść JSON z linku API KRS…'></textarea>
-        <div style="margin-top:10px"><button id="btnParse">Wczytaj z pola</button></div>
-      </div>
-    </details>
-  </div>
-
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const esc = (s)=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
-const qs = (n)=>new URL(location.href).searchParams.get(n);
-
-const DZIAL_DESC = {
-  dzial1: 'Dział I – Dane podmiotu i kapitał',
-  dzial2: 'Dział II – Organy i reprezentacja',
-  dzial3: 'Dział III – PKD, sprawozdania, wzmianki',
-  dzial4: 'Dział IV – Postępowania, upadłości',
-  dzial5: 'Dział V – Połączenia, podziały, przekształcenia',
-  dzial6: 'Dział VI – Wzmianki różne',
-  dzialI: 'Dział I – Dane podmiotu i kapitał',
-  dzialII: 'Dział II – Organy i reprezentacja',
-  dzialIII: 'Dział III – PKD, sprawozdania, wzmianki',
-  dzialIV: 'Dział IV – Postępowania, upadłości',
-  dzialV: 'Dział V – Połączenia, podziały, przekształcenia',
-  dzialVI: 'Dział VI – Wzmianki różne'
-};
 
 function normKrs(v){ return String(v||'').replace(/\D/g,'').padStart(10,'0').slice(-10); }
-function validKrs(v){ return /^\d{10}$/.test(v); }
-function apiUrl(krs, rej='P'){ return `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${krs}?rejestr=${rej}&format=json`; }
+function apiUrl(krs){ return `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${krs}?rejestr=P&format=json`; }
 
-function getLastNumerWpisu(payload){
+// znajdź ostatni wpis
+function getLastEntry(payload){
   const wpisy = payload?.odpis?.naglowekP?.wpis || [];
-  if(!Array.isArray(wpisy)||!wpisy.length) return null;
-  let last = -Infinity;
-  for(const w of wpisy){ const n=Number(w?.numerWpisu); if(Number.isFinite(n)&&n>last) last=n; }
-  return Number.isFinite(last)? last : null;
-}
-
-function getCompanyName(payload){
-  const paths = [
-    d=>d?.odpis?.dane?.dzial1?.danePodmiotu?.nazwa,
-    d=>d?.odpis?.dane?.dzial1?.danePodmiotu?.firma,
-    d=>d?.odpis?.dane?.dzial1?.podstawoweDane?.nazwa,
-    d=>d?.odpis?.dane?.dzial1?.podstawoweDane?.firma,
-    d=>d?.odpis?.dane?.dzialI?.danePodmiotu?.nazwa,
-    d=>d?.odpis?.dane?.dzialI?.danePodmiotu?.firma,
-  ];
-  for(const g of paths){ const v=g(payload); if(typeof v==='string'&&v.trim()) return v.trim(); }
-  // fallback: przejrzyj całe drzewo i weź najdłuższą sensowną nazwę
-  let best=''; const stack=[payload];
-  while(stack.length){
-    const cur=stack.pop();
-    if(Array.isArray(cur)){ for(const it of cur) stack.push(it); continue; }
-    if(cur && typeof cur==='object'){
-      const cand = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
-      if(typeof cand==='string' && cand.trim() && cand.length>best.length) best=cand.trim();
-      for(const k in cur) stack.push(cur[k]);
-    }
-  }
-  return best;
-}
-
-function collectChangedByDzial(payload, last){
-  const dane = payload?.odpis?.dane;
-  const out = [];
-  if(!dane || typeof dane!=='object') return out;
-
-  for(const key of Object.keys(dane)){
-    if(!/^dzial/i.test(key)) continue;
-    const section = dane[key];
-    const bucket = [];
-    const stack = [{node:section, path:key}];
-    while(stack.length){
-      const {node, path} = stack.pop();
-      if(Array.isArray(node)){ node.forEach((it,idx)=>stack.push({node:it, path:`${path}[${idx}]`})); continue; }
-      if(node && typeof node==='object'){
-        const nr = node.nrWpisuWprow ?? node.nrWpisuaWprow;
-        if(nr!=null && String(nr)===String(last)){
-          const view={};
-          for(const k of Object.keys(node)){
-            if(/^nrWpisu/i.test(k)) continue;
-            const v=node[k];
-            if(v==null) continue;
-            if(typeof v==='string'||typeof v==='number'||typeof v==='boolean'){
-              if(String(v).length>0) view[k]=v;
-            }
-          }
-          bucket.push({ path, view });
-        }
-        for(const k in node) stack.push({node:node[k], path: path+'.'+k});
+  if(!Array.isArray(wpisy) || !wpisy.length) return { numer:null, data:null };
+  let best = null;
+  for(const w of wpisy){
+    const n = Number(w?.numerWpisu);
+    if(Number.isFinite(n)){
+      if(!best || n > best.numer){
+        best = { numer:n, data: w?.dataDokonaniaWpisu || w?.dataWpisu || null };
       }
     }
-    if(bucket.length) out.push({ dzialKey:key, dzialName: DZIAL_DESC[key]||key, items: bucket });
   }
-  return out;
+  return best || { numer:null, data:null };
 }
 
-function getKapitalInfo(payload, last){
-  const cands = [
-    d=>d?.odpis?.dane?.dzial1?.kapital?.wysokoscKapitaluZakladowego,
-    d=>d?.odpis?.dane?.kapital?.wysokoscKapitaluZakladowego,
-    d=>d?.odpis?.dane?.dzialI?.kapital?.wysokoscKapitaluZakladowego,
-  ];
-  let arr=null; for(const g of cands){ const a=g(payload); if(Array.isArray(a)&&a.length){ arr=a; break; } }
-  if(!arr) return null;
-  const match = arr.find(it => String(it?.nrWpisuWprow ?? it?.nrWpisuaWprow) === String(last));
-  if(!match) return null;
-  const prev = arr.map(it=>({ nr:Number(it?.nrWpisuWprow ?? it?.nrWpisuaWprow), val: it?.wartosc }))
-                 .filter(x=>Number.isFinite(x.nr) && x.nr<last)
-                 .sort((a,b)=>b.nr-a.nr)[0] || null;
-  return { nowa: match?.wartosc ?? null, poprzednia: prev?.val ?? null };
-}
-function fmtPLN(raw){
-  try{ const n=Number(String(raw).replace(/ /g,'').replace(/\./g,'').replace(',','.')); if(Number.isFinite(n)) return n.toLocaleString('pl-PL',{style:'currency',currency:'PLN'}); }catch{}
-  return raw ?? '—';
+// pobierz nazwę spółki (tylko Dział I)
+function getCompanyName(payload){
+  return payload?.odpis?.dane?.dzial1?.danePodmiotu?.nazwa
+      || payload?.odpis?.dane?.dzialI?.danePodmiotu?.nazwa
+      || "—";
 }
 
-function renderResult({krs, name, last, kapital, dzialy, sourceUrl}){
-  const out = $('out');
-  out.innerHTML = '';
+// renderuj dane
+function render(payload){
+  const last = getLastEntry(payload);
+  const company = getCompanyName(payload);
+  const dateStr = last.data ? new Date(last.data).toLocaleDateString("pl-PL") : "brak daty";
 
-  const head = document.createElement('div');
-  head.className = 'card';
-  head.innerHTML = `
-    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:baseline">
-      <h2 style="margin:0">KRS ${esc(krs)}${name?` — ${esc(name)}`:''}</h2>
-      <span class="pill">Ostatni wpis: <code>${last}</code></span>
-      <a class="pill" href="${sourceUrl}" target="_blank" rel="noreferrer">JSON API</a>
-    </div>`;
-  out.appendChild(head);
-
-  if(kapital){
-    const prev = kapital.poprzednia ? fmtPLN(kapital.poprzednia) : '—';
-    const now  = kapital.nowa ? fmtPLN(kapital.nowa) : '—';
-    const diff = (()=>{
-      const n1=Number(String(kapital.nowa).replace(',','.').replace(/\s/g,'')); 
-      const n0=Number(String(kapital.poprzednia??'').replace(',','.').replace(/\s/g,''));
-      if(Number.isFinite(n1)&&Number.isFinite(n0)) return fmtPLN(n1-n0);
-      return '—';
-    })();
-    const kap = document.createElement('div');
-    kap.className='card';
-    kap.style.marginTop='12px';
-    kap.innerHTML = `
-      <div><strong class="ok">Zmieniono kapitał zakładowy</strong></div>
-      <div class="kv">
-        <div>Poprzednia: <strong>${prev}</strong></div>
-        <div>Nowa: <strong>${now}</strong></div>
-        <div>Różnica: <strong>${diff}</strong></div>
-      </div>`;
-    out.appendChild(kap);
-  }
-
-  const box = document.createElement('div');
-  if(!dzialy.length){
-    const empty = document.createElement('div');
-    empty.className='card';
-    empty.style.marginTop='12px';
-    empty.innerHTML = `<span class="muted">Brak zidentyfikowanych zmian w działach (dla ostatniego wpisu).</span>`;
-    out.appendChild(empty);
-  }else{
-    box.style.marginTop='12px';
-    dzialy.forEach(sec=>{
-      const det = document.createElement('details');
-      det.innerHTML = `
-        <summary><span class="caret"></span>${esc(sec.dzialName)}</summary>
-        <div class="kv"></div>`;
-      const kv = det.querySelector('.kv');
-      sec.items.forEach(it=>{
-        const rows = Object.entries(it.view).map(([k,v])=>`<div><code>${esc(k)}</code>: ${typeof v==='string' ? esc(v) : esc(JSON.stringify(v))}</div>`).join('');
-        const el = document.createElement('div'); el.style.marginTop='8px';
-        el.innerHTML = rows || `<div class="muted">Brak prostych pól do wyświetlenia (zmiana strukturalna).</div>`;
-        kv.appendChild(el);
-      });
-      box.appendChild(det);
-    });
-    out.appendChild(box);
-  }
+  $("out").innerHTML = `
+    <h2>KRS ${payload.odpis.naglowekP.numerKRS} — ${company}</h2>
+    <p><strong>Ostatni wpis:</strong> ${last.numer ?? "—"} (${dateStr})</p>
+  `;
 }
 
-async function fetchJson(url){
-  $('note').textContent='';
-  $('meta').textContent = url;
-  try{
-    const res = await fetch(url,{ headers:{ 'Accept':'application/json' }});
-    if(!res.ok) throw new Error('HTTP '+res.status);
-    const txt = await res.text();
-    return JSON.parse(txt);
-  }catch(e){
-    $('note').innerHTML = `<span class="warn">Nie udało się pobrać JSON (CORS/sieć). Otwórz link, skopiuj treść i użyj „Wklej JSON”.</span>`;
-    $('pasteBox').open = true;
-    throw e;
-  }
-}
-
-async function run(krs){
-  const clean = normKrs(krs);
-  if(!validKrs(clean)){ $('note').innerHTML='<span class="err">Podaj prawidłowy numer KRS (10 cyfr).</span>'; return; }
-  const url = apiUrl(clean,'P');
-  try{
-    const payload = await fetchJson(url);
-    const name = getCompanyName(payload)||'';
-    const last = getLastNumerWpisu(payload);
-    if(last==null){ $('out').innerHTML='<div class="card"><span class="err">Brak sekcji wpisów w odpisie.</span></div>'; return; }
-    const kapital = getKapitalInfo(payload,last);
-    const dzialy = collectChangedByDzial(payload,last);
-    renderResult({krs:clean, name, last, kapital, dzialy, sourceUrl:url});
-  }catch{/* notka już ustawiona */}
-}
-
-// UI
-$('btn').onclick = ()=> run($('krs').value);
-$('krs').addEventListener('keydown', e=>{ if(e.key==='Enter') run($('krs').value); });
-$('btnParse').onclick = ()=>{
-  try{
-    const json = JSON.parse($('ta').value);
-    const krs = normKrs($('krs').value || qs('krs') || '');
-    const name = getCompanyName(json)||'';
-    const last = getLastNumerWpisu(json);
-    const kapital = last!=null ? getKapitalInfo(json,last) : null;
-    const dzialy = last!=null ? collectChangedByDzial(json,last) : [];
-    renderResult({krs, name, last, kapital, dzialy, sourceUrl:'(wklejka)'});
-    $('note').textContent='Wczytano z wklejki.';
-  }catch(e){
-    $('note').innerHTML = '<span class="err">Błędny JSON: '+esc(e.message)+'</span>';
+// fetch z API
+$("btn").onclick = async ()=>{
+  const krs = normKrs($("krs").value);
+  if(!/^\d{10}$/.test(krs)) { alert("Niepoprawny numer KRS"); return; }
+  $("meta").textContent = apiUrl(krs);
+  try {
+    const res = await fetch(apiUrl(krs));
+    const data = await res.json();
+    render(data);
+  } catch(err){
+    console.error(err);
+    $("out").innerHTML = `<p class="muted">Błąd pobierania danych</p>`;
   }
 };
-
-// start z query ?krs=
-(function init(){
-  const q = qs('krs'); if(q){ $('krs').value = normKrs(q); run(q); }
-})();
 </script>
 </body>
 </html>
