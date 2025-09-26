@@ -2,15 +2,12 @@
   "name": "krs-watcher",
   "version": "2.0.0",
   "type": "module",
-  "description": "Codzienny watcher zmian w KRS z HTML powiadomieniami e-mail",
-  "main": "src/krsWatcher.mjs",
   "scripts": {
-    "check": "node src/krsWatcher.mjs --force-send --dry-run",
-    "test:now": "node src/krsWatcher.mjs --force-send"
+    "test:now": "node src/krsWatcher.mjs --force-send",
+    "watcher": "node src/krsWatcher.mjs"
   },
-  "engines": { "node": ">=18" },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "nodemailer": "^6.9.13"
+    "node-fetch": "^3.3.2",
+    "nodemailer": "^6.9.8"
   }
 }
