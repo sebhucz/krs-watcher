@@ -66,11 +66,49 @@ function getLastEntry(payload){
 }
 
 // pobierz nazwę spółki (tylko Dział I)
-function getCompanyName(payload){
-  return payload?.odpis?.dane?.dzial1?.danePodmiotu?.nazwa
-      || payload?.odpis?.dane?.dzialI?.danePodmiotu?.nazwa
-      || "—";
-}
+ // NAZWA SPÓŁKI – tylko Dział I; bierzemy rekord z najwyższym nrWpisu(Wprow)
+  function getCompanyName(payload){
+    // 1) jeśli są proste pola w Dziale I – użyj od razu
+    const direct = [
+      d=>d?.odpis?.dane?.dzial1?.danePodmiotu?.nazwa,
+      d=>d?.odpis?.dane?.dzial1?.danePodmiotu?.firma,
+      d=>d?.odpis?.dane?.dzial1?.podstawoweDane?.nazwa,
+      d=>d?.odpis?.dane?.dzial1?.podstawoweDane?.firma,
+      d=>d?.odpis?.dane?.dzialI?.danePodmiotu?.nazwa,
+      d=>d?.odpis?.dane?.dzialI?.danePodmiotu?.firma,
+    ];
+    for(const g of direct){
+      const v = g(payload);
+      if(typeof v === 'string' && v.trim()) return v.trim();
+    }
+
+    // 2) skanuj WYŁĄCZNIE Dział I; wybierz kandydat z najwyższym nrWpisu(Wprow)
+    const dz1 = payload?.odpis?.dane?.dzial1 ?? payload?.odpis?.dane?.dzialI;
+    if(!dz1 || typeof dz1 !== 'object') return '';
+
+    let bestWithNr = { nr: -Infinity, name: null };
+    let bestFallback = '';
+    const stack = [dz1];
+
+    while(stack.length){
+      const cur = stack.pop();
+      if(Array.isArray(cur)){ for(const it of cur) stack.push(it); continue; }
+      if(cur && typeof cur === 'object'){
+        const candidate = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
+        if(typeof candidate === 'string' && candidate.trim()){
+          const nr = Number(cur.nrWpisuWprow ?? cur.nrWpisuaWprow);
+          if(Number.isFinite(nr)){
+            if(nr >= bestWithNr.nr) bestWithNr = { nr, name: candidate.trim() };
+          } else if(candidate.trim().length > bestFallback.length){
+            bestFallback = candidate.trim();
+          }
+        }
+        for(const k in cur) stack.push(cur[k]);
+      }
+    }
+
+    return bestWithNr.name || bestFallback || '';
+  }
 
 // renderuj dane
 function render(payload){
@@ -101,3 +139,4 @@ $("btn").onclick = async ()=>{
 </script>
 </body>
 </html>
+
