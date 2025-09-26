@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>KRS Watcher – Panel</title>
 <style>
-  :root { --bg:#0b1220; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; --accent:#60a5fa; --ok:#22c55e; --warn:#facc15; --err:#ef4444; --border:#1f2937; }
+  :root { --bg:#0b1220; --card:#111827; --fg:#e5e7eb; --muted:#9ca3af; --accent:#60a5fa; --border:#1f2937; }
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f8fafc; --card:#ffffff; --fg:#111827; --muted:#6b7280; --accent:#2563eb; --ok:#16a34a; --warn:#ca8a04; --err:#b91c1c; --border:#e5e7eb; }
+    :root { --bg:#f8fafc; --card:#ffffff; --fg:#111827; --muted:#6b7280; --accent:#2563eb; --border:#e5e7eb; }
   }
   * { box-sizing: border-box }
   body { margin:0; font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:var(--fg); }
@@ -17,7 +17,6 @@
   input[type="text"] { flex:1 1 420px; padding:12px 14px; border:1px solid var(--border); background:transparent; color:var(--fg); border-radius:12px; outline:none }
   button { padding:12px 16px; border-radius:12px; border:1px solid var(--border); background:var(--card); color:var(--fg); cursor:pointer }
   button:hover { border-color:var(--accent) }
-  small { color:var(--muted) }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; }
   .pill { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:#0b122010; margin-left:8px }
   .muted { color:var(--muted) }
@@ -27,7 +26,7 @@
 <header>
   <div class="wrap row">
     <strong>KRS Watcher – Panel</strong>
-    <small>• wpisz KRS i sprawdź od razu • jeśli CORS, użyj „Wklej JSON”</small>
+    <small>• wpisz KRS i sprawdź od razu •</small>
   </div>
 </header>
 
@@ -46,73 +45,133 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
+// ─ helpers ──────────────────────────────────────────────────────────────────
 function normKrs(v){ return String(v||'').replace(/\D/g,'').padStart(10,'0').slice(-10); }
 function apiUrl(krs){ return `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${krs}?rejestr=P&format=json`; }
 
-// ostatni wpis (numer + data)
+// format daty bez używania Date() (KRS zwraca DD.MM.RRRR lub czasem RRRR-MM-DD)
+function prettyDate(s){
+  if(!s) return 'brak daty';
+  if(/\d{2}\.\d{2}\.\d{4}/.test(s)) return s;              // DD.MM.RRRR -> zwróć jak jest
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);  // RRRR-MM-DD -> przekręć na DD.MM.RRRR
+  if(m) return `${m[3]}.${m[2]}.${m[1]}`;
+  return s;
+}
+
+// ─ ostatni wpis (numer + data) ──────────────────────────────────────────────
 function getLastEntry(payload){
   const wpisy = payload?.odpis?.naglowekP?.wpis || [];
   if(!Array.isArray(wpisy) || !wpisy.length) return { numer:null, data:null };
   let best = null;
   for(const w of wpisy){
     const n = Number(w?.numerWpisu);
-    if(Number.isFinite(n)){
-      if(!best || n > best.numer){
-        best = { numer:n, data: w?.dataDokonaniaWpisu || w?.dataWpisu || null };
-      }
+    if(Number.isFinite(n) && (!best || n > best.numer)){
+      best = { numer:n, data: w?.dataWpisu || w?.dataDokonaniaWpisu || null };
     }
   }
   return best || { numer:null, data:null };
 }
 
-// NAZWA SPÓŁKI – tylko Dział I; wybieramy rekord z najwyższym nrWpisu
+// ─ aktualna nazwa z Działu I ────────────────────────────────────────────────
+// w tym odpisie nazwy są w: odpis.dane.dzial1.danePodmiotu.nazwa[] (historia)
+// wybieramy element z NAJWIĘKSZYM nrWpisuWprow; podobnie działa 'firma[]'.
+function latestNameFromArray(arr){
+  let best = { nr:-Infinity, name:'' };
+  for(const it of arr){
+    // obiekt: { nazwa:"...", nrWpisuWprow:"34" } lub { firma:"..." ... }
+    const name = typeof it.nazwa === 'string' ? it.nazwa
+               : typeof it.firma === 'string' ? it.firma
+               : '';
+    if(!name) continue;
+    const nr = Number(it.nrWpisuWprow ?? it.nrWpisuaWprow ?? it.nrwpisuwprow);
+    if(Number.isFinite(nr)){
+      if(nr > best.nr) best = { nr, name: name.trim() };
+    } else if(!best.name) {
+      best.name = name.trim(); // awaryjnie, gdy brak numeru
+    }
+  }
+  return best.name;
+}
+
 function getCompanyName(payload){
   const dz1 = payload?.odpis?.dane?.dzial1 ?? payload?.odpis?.dane?.dzialI;
-  if(!dz1 || typeof dz1 !== 'object') return '';
+  if(!dz1) return '';
 
-  let bestWithNr = { nr: -Infinity, name: null };
+  // 1) proste ścieżki (gdy KRS zwróci od razu stringi)
+  const direct = dz1?.danePodmiotu;
+  if(direct){
+    if(typeof direct.nazwa === 'string') return direct.nazwa.trim();
+    if(typeof direct.firma === 'string') return direct.firma.trim();
+
+    if(Array.isArray(direct.nazwa)){
+      const n = latestNameFromArray(direct.nazwa);
+      if(n) return n;
+    }
+    if(Array.isArray(direct.firma)){
+      const n = latestNameFromArray(direct.firma);
+      if(n) return n;
+    }
+  }
+
+  // 2) inne znane miejsca
+  const pod = dz1?.podstawoweDane;
+  if(pod && typeof pod.nazwa === 'string') return pod.nazwa.trim();
+
+  // 3) ostateczny fallback: przeskanuj TYLKO Dział I i zbierz kandydatów
+  let bestWithNr = { nr:-Infinity, name:'' };
   let bestFallback = '';
   const stack = [dz1];
-
   while(stack.length){
     const cur = stack.pop();
-    if(Array.isArray(cur)){ for(const it of cur) stack.push(it); continue; }
+    if(Array.isArray(cur)){ for(const x of cur) stack.push(x); continue; }
     if(cur && typeof cur === 'object'){
-      const candidate = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
-      if(typeof candidate === 'string' && candidate.trim()){
-        const nr = Number(cur.nrWpisuWprow ?? cur.nrWpisuaWprow);
+      const val = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
+      let cand = '';
+      if(typeof val === 'string') cand = val;
+      else if(val && typeof val === 'object'){
+        cand = (typeof val.nazwa === 'string' && val.nazwa)
+            || (typeof val.firma === 'string' && val.firma) || '';
+      } else if(Array.isArray(val)){
+        const joined = val.map(v => (typeof v === 'string' ? v
+                                  : (v && typeof v === 'object' && (v.nazwa||v.firma)) || ''))
+                         .filter(Boolean)[0] || '';
+        cand = joined;
+      }
+
+      if(cand){
+        const nr = Number(cur.nrWpisuWprow ?? cur.nrWpisuaWprow ?? cur.nrwpisuwprow);
         if(Number.isFinite(nr)){
-          if(nr >= bestWithNr.nr) bestWithNr = { nr, name: candidate.trim() };
-        } else if(candidate.trim().length > bestFallback.length){
-          bestFallback = candidate.trim();
+          if(nr >= bestWithNr.nr) bestWithNr = { nr, name: cand.trim() };
+        } else if(!bestFallback || cand.length > bestFallback.length){
+          bestFallback = cand.trim();
         }
       }
       for(const k in cur) stack.push(cur[k]);
     }
   }
-
   return bestWithNr.name || bestFallback || '';
 }
 
-// renderuj dane
+// ─ render ───────────────────────────────────────────────────────────────────
 function render(payload){
-  const last = getLastEntry(payload);
+  const { numer, data } = getLastEntry(payload);
   const company = getCompanyName(payload);
-  const dateStr = last.data ? new Date(last.data).toLocaleDateString("pl-PL") : "brak daty";
+  const dateStr = prettyDate(data);
 
   $("out").innerHTML = `
-    <h2>KRS ${payload.odpis.naglowekP.numerKRS} — ${company}</h2>
-    <p><strong>Ostatni wpis:</strong> ${last.numer ?? "—"} (${dateStr})</p>
+    <h2>KRS ${payload?.odpis?.naglowekP?.numerKRS || ""} — ${company || "—"}</h2>
+    <p><strong>Ostatni wpis:</strong> ${numer ?? "—"} (${dateStr})</p>
   `;
 }
 
-// fetch z API
+// ─ actions ──────────────────────────────────────────────────────────────────
 $("btn").onclick = async ()=>{
   const krs = normKrs($("krs").value);
   if(!/^\d{10}$/.test(krs)) { alert("Niepoprawny numer KRS"); return; }
-  $("meta").textContent = apiUrl(krs);
+  const url = apiUrl(krs);
+  $("meta").textContent = url;
   try {
-    const res = await fetch(apiUrl(krs));
+    const res = await fetch(url);
     const data = await res.json();
     render(data);
   } catch(err){
