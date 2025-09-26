@@ -2,13 +2,15 @@
 
 import fs from "fs";
 import path from "path";
-import fetch from "node-fetch";
 import nodemailer from "nodemailer";
 import { fileURLToPath } from "url";
 
+// ✅ UWAGA: od Node.js 18+ mamy fetch wbudowany
+// Tu robimy fallback – jeśli globalny fetch nie istnieje, wtedy dynamicznie załadujemy node-fetch
+const fetch = globalThis.fetch ?? (await import("node-fetch")).default;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const CONFIG_PATH = path.join(__dirname, "config.json");
 const STATE_PATH = path.join(__dirname, "state.json");
 
