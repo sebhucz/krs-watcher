@@ -7,7 +7,6 @@
     "watcher": "node src/krsWatcher.mjs"
   },
   "dependencies": {
-    "node-fetch": "^3.3.2",
     "nodemailer": "^6.9.8"
   }
 }
