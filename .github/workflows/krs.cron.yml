@@ -1,10 +1,10 @@
-name: KRS Watcher (prod)
+name: krs.cron.yml
 
 on:
   schedule:
-    # codziennie o 14:00 czasu polskiego (Europe/Warsaw) → 12:00 UTC
-    - cron: "0 12 * * *"
-  workflow_dispatch: {}
+    # Codziennie o 14:00
+    - cron: "0 14 * * *"
+  workflow_dispatch:   # ✅ Dodane - ręczne wywołanie z Actions
 
 jobs:
   run:
@@ -16,10 +16,9 @@ jobs:
       - name: Restore state cache
         uses: actions/cache@v4
         with:
-          path: src/state.json
+          path: .krs-state.json
           key: krs-state-${{ github.run_id }}
-          restore-keys: |
-            krs-state-
+          restore-keys: krs-state-
 
       - uses: actions/setup-node@v4
         with:
@@ -30,9 +29,6 @@ jobs:
       - name: Run watcher (production)
         run: node src/krsWatcher.mjs
         env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_SECURE: ${{ secrets.SMTP_SECURE }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
