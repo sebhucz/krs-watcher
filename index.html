@@ -9,7 +9,7 @@
   @media (prefers-color-scheme: light) {
     :root { --bg:#f8fafc; --card:#ffffff; --fg:#111827; --muted:#6b7280; --accent:#2563eb; --border:#e5e7eb; }
   }
-  * { box-sizing: border-box }
+  * { box-sizing:border-box }
   body { margin:0; font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:var(--bg); color:var(--fg); }
   header { padding:16px; border-bottom:1px solid var(--border); background:var(--card); position:sticky; top:0; z-index:10; }
   .wrap { max-width:1100px; margin:0 auto; padding:16px; }
@@ -18,15 +18,17 @@
   button { padding:12px 16px; border-radius:12px; border:1px solid var(--border); background:var(--card); color:var(--fg); cursor:pointer }
   button:hover { border-color:var(--accent) }
   .card { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:16px; }
-  .pill { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:#0b122010; margin-left:8px }
+  .pill { display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid var(--border); background:#0b122010; margin-right:8px; white-space:nowrap }
   .muted { color:var(--muted) }
+  ul.tags { list-style:none; padding:0; margin:10px 0 0; display:flex; flex-wrap:wrap; gap:8px; }
+  ul.tags li { border:1px solid var(--border); border-radius:999px; padding:4px 10px; background:#0b122010 }
 </style>
 </head>
 <body>
 <header>
   <div class="wrap row">
     <strong>KRS Watcher – Panel</strong>
-    <small>• wpisz KRS i sprawdź od razu •</small>
+    <small>• wpisz KRS i sprawdź od razu</small>
   </div>
 </header>
 
@@ -45,20 +47,37 @@
 <script>
 const $ = (id) => document.getElementById(id);
 
-// ─ helpers ──────────────────────────────────────────────────────────────────
+// ───────────────── helpers ─────────────────
 function normKrs(v){ return String(v||'').replace(/\D/g,'').padStart(10,'0').slice(-10); }
 function apiUrl(krs){ return `https://api-krs.ms.gov.pl/api/krs/OdpisPelny/${krs}?rejestr=P&format=json`; }
 
-// format daty bez używania Date() (KRS zwraca DD.MM.RRRR lub czasem RRRR-MM-DD)
+// formatuj datę BEZ obiektu Date (żeby 10.07 nie stawało się 7.10)
 function prettyDate(s){
-  if(!s) return 'brak daty';
-  if(/\d{2}\.\d{2}\.\d{4}/.test(s)) return s;              // DD.MM.RRRR -> zwróć jak jest
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/);  // RRRR-MM-DD -> przekręć na DD.MM.RRRR
+  if(!s) return "brak daty";
+  const t = String(s).trim();
+  if(/^\d{2}\.\d{2}\.\d{4}$/.test(t)) return t;           // DD.MM.RRRR – zwróć jak jest
+  const m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);         // RRRR-MM-DD ➜ DD.MM.RRRR
   if(m) return `${m[3]}.${m[2]}.${m[1]}`;
-  return s;
+  return t;                                               // inne formaty – pokaż surowo
 }
 
-// ─ ostatni wpis (numer + data) ──────────────────────────────────────────────
+// nazwy działów
+const DZIALY = {
+  dzial1:  "Dział I – Dane podmiotu i kapitał",
+  dzial2:  "Dział II – Organy i reprezentacja",
+  dzial3:  "Dział III – PKD, sprawozdania, wzmianki",
+  dzial4:  "Dział IV – Postępowania, upadłości",
+  dzial5:  "Dział V – Połączenia, podziały, przekształcenia",
+  dzial6:  "Dział VI – Wzmianki różne",
+  dzialI:  "Dział I – Dane podmiotu i kapitał",
+  dzialII: "Dział II – Organy i reprezentacja",
+  dzialIII:"Dział III – PKD, sprawozdania, wzmianki",
+  dzialIV: "Dział IV – Postępowania, upadłości",
+  dzialV:  "Dział V – Połączenia, podziały, przekształcenia",
+  dzialVI: "Dział VI – Wzmianki różne",
+};
+
+// ───────────── ostatni wpis (numer + data) ─────────────
 function getLastEntry(payload){
   const wpisy = payload?.odpis?.naglowekP?.wpis || [];
   if(!Array.isArray(wpisy) || !wpisy.length) return { numer:null, data:null };
@@ -72,22 +91,18 @@ function getLastEntry(payload){
   return best || { numer:null, data:null };
 }
 
-// ─ aktualna nazwa z Działu I ────────────────────────────────────────────────
-// w tym odpisie nazwy są w: odpis.dane.dzial1.danePodmiotu.nazwa[] (historia)
-// wybieramy element z NAJWIĘKSZYM nrWpisuWprow; podobnie działa 'firma[]'.
+// ───────────── nazwa spółki z Działu I (najwyższy nrWpisuWprow) ─────────────
 function latestNameFromArray(arr){
   let best = { nr:-Infinity, name:'' };
   for(const it of arr){
-    // obiekt: { nazwa:"...", nrWpisuWprow:"34" } lub { firma:"..." ... }
-    const name = typeof it.nazwa === 'string' ? it.nazwa
-               : typeof it.firma === 'string' ? it.firma
-               : '';
-    if(!name) continue;
+    const nm = typeof it.nazwa === 'string' ? it.nazwa
+             : typeof it.firma === 'string' ? it.firma : '';
+    if(!nm) continue;
     const nr = Number(it.nrWpisuWprow ?? it.nrWpisuaWprow ?? it.nrwpisuwprow);
     if(Number.isFinite(nr)){
-      if(nr > best.nr) best = { nr, name: name.trim() };
+      if(nr > best.nr) best = { nr, name: nm.trim() };
     } else if(!best.name) {
-      best.name = name.trim(); // awaryjnie, gdy brak numeru
+      best.name = nm.trim();
     }
   }
   return best.name;
@@ -95,49 +110,35 @@ function latestNameFromArray(arr){
 
 function getCompanyName(payload){
   const dz1 = payload?.odpis?.dane?.dzial1 ?? payload?.odpis?.dane?.dzialI;
-  if(!dz1) return '';
+  if(!dz1) return "";
 
-  // 1) proste ścieżki (gdy KRS zwróci od razu stringi)
-  const direct = dz1?.danePodmiotu;
-  if(direct){
-    if(typeof direct.nazwa === 'string') return direct.nazwa.trim();
-    if(typeof direct.firma === 'string') return direct.firma.trim();
-
-    if(Array.isArray(direct.nazwa)){
-      const n = latestNameFromArray(direct.nazwa);
-      if(n) return n;
-    }
-    if(Array.isArray(direct.firma)){
-      const n = latestNameFromArray(direct.firma);
-      if(n) return n;
-    }
+  const dp = dz1?.danePodmiotu;
+  if(dp){
+    if(typeof dp.nazwa === 'string') return dp.nazwa.trim();
+    if(typeof dp.firma === 'string') return dp.firma.trim();
+    if(Array.isArray(dp.nazwa)){ const n = latestNameFromArray(dp.nazwa); if(n) return n; }
+    if(Array.isArray(dp.firma)){ const n = latestNameFromArray(dp.firma); if(n) return n; }
   }
-
-  // 2) inne znane miejsca
   const pod = dz1?.podstawoweDane;
   if(pod && typeof pod.nazwa === 'string') return pod.nazwa.trim();
 
-  // 3) ostateczny fallback: przeskanuj TYLKO Dział I i zbierz kandydatów
-  let bestWithNr = { nr:-Infinity, name:'' };
-  let bestFallback = '';
+  // fallback – skan tylko Dz. I
+  let bestWithNr = { nr:-Infinity, name:'' }, bestFallback = '';
   const stack = [dz1];
   while(stack.length){
     const cur = stack.pop();
     if(Array.isArray(cur)){ for(const x of cur) stack.push(x); continue; }
     if(cur && typeof cur === 'object'){
-      const val = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
+      const v = cur.firma ?? cur.nazwa ?? cur.nazwaSkrocona;
       let cand = '';
-      if(typeof val === 'string') cand = val;
-      else if(val && typeof val === 'object'){
-        cand = (typeof val.nazwa === 'string' && val.nazwa)
-            || (typeof val.firma === 'string' && val.firma) || '';
-      } else if(Array.isArray(val)){
-        const joined = val.map(v => (typeof v === 'string' ? v
-                                  : (v && typeof v === 'object' && (v.nazwa||v.firma)) || ''))
-                         .filter(Boolean)[0] || '';
-        cand = joined;
+      if(typeof v === 'string') cand = v;
+      else if(v && typeof v === 'object'){
+        cand = (typeof v.nazwa === 'string' && v.nazwa) || (typeof v.firma === 'string' && v.firma) || '';
+      } else if(Array.isArray(v)){
+        cand = v.map(z => typeof z === 'string' ? z
+                         : (z && typeof z === 'object' && (z.nazwa||z.firma)) || '')
+                .filter(Boolean)[0] || '';
       }
-
       if(cand){
         const nr = Number(cur.nrWpisuWprow ?? cur.nrWpisuaWprow ?? cur.nrwpisuwprow);
         if(Number.isFinite(nr)){
@@ -149,22 +150,59 @@ function getCompanyName(payload){
       for(const k in cur) stack.push(cur[k]);
     }
   }
-  return bestWithNr.name || bestFallback || '';
+  return bestWithNr.name || bestFallback || "";
 }
 
-// ─ render ───────────────────────────────────────────────────────────────────
+// ───────────── które DZIAŁY zmieniły się w ostatnim wpisie ─────────────
+function hasEntryIn(obj, nr){
+  const target = String(nr);
+  const stack = [obj];
+  const keyPat = /^(nr.*wpis|nrwpis.*|nrWpisu.*|nrWzmianki.*)$/i;
+  while(stack.length){
+    const cur = stack.pop();
+    if(Array.isArray(cur)){ for(const x of cur) stack.push(x); continue; }
+    if(cur && typeof cur === 'object'){
+      for(const [k,v] of Object.entries(cur)){
+        if((typeof v === 'string' || typeof v === 'number') && String(v) === target && keyPat.test(k)){
+          return true;
+        }
+      }
+      for(const v of Object.values(cur)) stack.push(v);
+    }
+  }
+  return false;
+}
+
+function sectionsForEntry(payload, nr){
+  const dane = payload?.odpis?.dane || {};
+  const keys = ["dzial1","dzial2","dzial3","dzial4","dzial5","dzial6","dzialI","dzialII","dzialIII","dzialIV","dzialV","dzialVI"];
+  const out = [];
+  for(const k of keys){
+    if(dane[k] && hasEntryIn(dane[k], nr)){
+      // wybierz ładną nazwę (preferuj arabskie)
+      const mapKey = k.replace(/^dzialI+$/, k.toLowerCase());
+      out.push(DZIALY[k] || DZIALY[mapKey] || k);
+    }
+  }
+  // deduplikacja (gdy jest i 'dzial3', i 'dzialIII')
+  return [...new Set(out)];
+}
+
+// ───────────── render ─────────────
 function render(payload){
   const { numer, data } = getLastEntry(payload);
   const company = getCompanyName(payload);
   const dateStr = prettyDate(data);
+  const dzialy = numer != null ? sectionsForEntry(payload, numer) : [];
 
   $("out").innerHTML = `
     <h2>KRS ${payload?.odpis?.naglowekP?.numerKRS || ""} — ${company || "—"}</h2>
     <p><strong>Ostatni wpis:</strong> ${numer ?? "—"} (${dateStr})</p>
+    ${dzialy.length ? `<div><strong>Działy:</strong> <ul class="tags">${dzialy.map(d=>`<li>${d}</li>`).join("")}</ul></div>` : `<p class="muted">Nie znaleziono działów powiązanych z tym wpisem.</p>`}
   `;
 }
 
-// ─ actions ──────────────────────────────────────────────────────────────────
+// ───────────── akcja „Sprawdź teraz” ─────────────
 $("btn").onclick = async ()=>{
   const krs = normKrs($("krs").value);
   if(!/^\d{10}$/.test(krs)) { alert("Niepoprawny numer KRS"); return; }
