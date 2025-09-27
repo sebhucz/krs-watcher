@@ -1,4 +1,4 @@
-name: krs.cron.yml
+name: KRS Watcher (prod)
 
 on:
   schedule:
