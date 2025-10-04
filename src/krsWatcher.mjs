@@ -249,7 +249,7 @@ const last = lastWpis.numer; // Pobieramy numer do dalszych porównań
       const kapital = getKapitalInfo(payload, last);
       const dzialy = collectChangedByDzial(payload, last);
 
-      results.push({ krs, name, last, kapital, dzialy });
+results.push({ krs, name, last, lastDate: lastWpis.data, kapital, dzialy });
 
       state[krs] = last;
     } catch (e) {
@@ -269,7 +269,7 @@ const last = lastWpis.numer; // Pobieramy numer do dalszych porównań
 
   for (const r of results) {
     html += `<h2>${r.name} (KRS ${r.krs})</h2>`;
-    html += `<p>Ostatni wpis: ${r.last}</p>`;
+    html += `<p>Ostatni wpis: ${r.last} (dnia ${r.lastDate})</p>`;
     if (r.kapital) {
       html += `<p><strong>Kapitał zakładowy zmieniony:</strong> ${r.kapital.poprzednia} → ${r.kapital.nowa}</p>`;
     }
