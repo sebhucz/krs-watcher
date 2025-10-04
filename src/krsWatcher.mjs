@@ -56,11 +56,25 @@ async function fetchOdpis(krs) {
   return res.json();
 }
 
-// ---- funkcja: ostatni numer wpisu ----
-function getLastNumerWpisu(payload) {
+// ---- funkcja: informacje o ostatnim wpisie ----
+function getLastWpisInfo(payload) {
   const wpisy = payload?.odpis?.naglowekP?.wpis || [];
   if (!Array.isArray(wpisy) || !wpisy.length) return null;
-  return Math.max(...wpisy.map((w) => Number(w?.numerWpisu) || 0));
+
+  // Znajdź wpis z najwyższym numerem
+  const ostatniWpis = wpisy.reduce((najnowszy, aktualny) => {
+    const nrNajnowszy = Number(najnowszy?.numerWpisu || 0);
+    const nrAktualny = Number(aktualny?.numerWpisu || 0);
+    return nrAktualny > nrNajnowszy ? aktualny : najnowszy;
+  });
+
+  if (!ostatniWpis) return null;
+
+  // Zwróć obiekt z numerem i datą
+  return {
+    numer: Number(ostatniWpis.numerWpisu),
+    data: ostatniWpis.dataWpisu,
+  };
 }
 
 // ---- funkcja: NAZWA SPÓŁKI – tylko Dział I ----
