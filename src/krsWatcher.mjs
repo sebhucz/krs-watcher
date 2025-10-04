@@ -16,7 +16,27 @@ const STATE_PATH = path.join(__dirname, "state.json");
 
 // ---- funkcja: wczytaj konfigurację ----
 function loadConfig() {
-  return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+  const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+
+  // Sprawdź, czy istnieje klucz krs_file i wczytaj dane
+  if (config.krs_file) {
+    const krsFilePath = path.join(__dirname, config.krs_file);
+    config.krs = fs.readFileSync(krsFilePath, "utf8")
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  }
+
+  // Sprawdź, czy istnieje klucz recipients_file i wczytaj dane
+  if (config.recipients_file) {
+    const recipientsFilePath = path.join(__dirname, config.recipients_file);
+    config.recipients = fs.readFileSync(recipientsFilePath, "utf8")
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+  }
+
+  return config;
 }
 
 // ---- funkcja: wczytaj/utwórz state ----
