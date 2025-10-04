@@ -235,8 +235,10 @@ async function main() {
   for (const krs of config.krs) {
     try {
       const payload = await fetchOdpis(krs);
-      const last = getLastNumerWpisu(payload);
-      if (!last) continue;
+const lastWpis = getLastWpisInfo(payload); // Używamy nowej funkcji
+if (!lastWpis) continue; // Sprawdzamy cały obiekt
+
+const last = lastWpis.numer; // Pobieramy numer do dalszych porównań
 
       const prevLast = state[krs] || null;
       if (prevLast !== null && prevLast === last) {
