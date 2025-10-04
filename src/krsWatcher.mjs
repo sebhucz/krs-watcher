@@ -198,7 +198,7 @@ async function main() {
   const state = loadState();
   const results = [];
 
-  for (const { krs } of config.krs) {
+  for (const krs of config.krs) {
     try {
       const payload = await fetchOdpis(krs);
       const last = getLastNumerWpisu(payload);
